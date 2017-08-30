@@ -1,0 +1,124 @@
+Pack up certificate and key:
+> openssl pkcs12 -export -in server.crt -inkey server.key -out server.p12
+
+Put it into certificate store:
+> cd /etc/dirsrv/slapd-ldapdom
+> certutil -A -d . -n "ca_cert" -t "C,," -i /root/ca.crt
+> pk12util -d . -i /root/server.p12
+
+Restart directory server:
+> i restart dirsrv@ldapdom
+
+Specify CA inside /etc/openldap/ldap.conf:
+TLS_CACERT /ca.crt
+
+Test LDAPS connection:
+> ldapsearch -x -H ldaps://krb.ldapdom.net:636
+
+Install password for kerberos ldap client:
+> ldappasswd -x -H ldaps://krb.ldapdom.net -D cn=root -waaaaaaaa -saaaaaaaa 'cn=krbkdc,dc=ldapdom,dc=net'
+> ldappasswd -x -H ldaps://krb.ldapdom.net -D cn=root -waaaaaaaa -saaaaaaaa 'cn=krbadm,dc=ldapdom,dc=net'
+
+Write Kerberos client + common configuration into /etc/krb5.conf:
+[libdefaults]
+        default_realm = LDAPDOM.NET
+
+[realms]
+        LDAPDOM.NET = {
+                kdc = krb.ldapdom.net
+                admin_server = krb.ldapdom.net
+        }
+
+[domain_realm]
+        .ldapdom.net = LDAPDOM.NET
+        ldapdom.net = LDAPDOM.NET
+
+[logging]
+    kdc = FILE:/var/log/krb5/krb5kdc.log
+    admin_server = FILE:/var/log/krb5/kadmind.log
+    default = SYSLOG:NOTICE:DAEMON
+
+Write Kerberos KDC configuration into /var/lib/kerberos/krb5kdc/kdc.conf:
+[kdcdefaults]
+        kdc_ports = 750,88
+
+[realms]
+        LDAPDOM.NET = {
+                database_module = contact_ldapdom
+        }
+
+[dbdefaults]
+
+[dbmodules]
+        contact_ldapdom = {
+                db_library = kldap
+                ldap_kdc_dn = "cn=krbkdc,dc=ldapdom,dc=net"
+                ldap_kadmind_dn = "cn=krbadm,dc=ldapdom,dc=net"
+                ldap_kerberos_container_dn = "cn=krb,dc=ldapdom,dc=net"
+                ldap_service_password_file = /ldap-krb-keyfile
+                ldap_servers = ldap://krb.ldapdom.net
+        }
+
+[logging]
+        kdc = FILE:/var/log/krb5/krb5kdc.log
+        admin_server = FILE:/var/log/krb5/kadmind.log
+
+Write Kerberos KDC configuration into /var/lib/kerberos/krb5kdc/kdc.conf:
+[kdcdefaults]
+        kdc_ports = 750,88
+
+[realms]
+        LDAPDOM.NET = {
+                database_module = contact_ldapdom
+        }
+
+[dbdefaults]
+
+[dbmodules]
+        contact_ldapdom = {
+                db_library = kldap
+                ldap_kdc_dn = "cn=krbkdc,dc=ldapdom,dc=net"
+                ldap_kadmind_dn = "cn=krbadm,dc=ldapdom,dc=net"
+                ldap_kerberos_container_dn = "cn=krb,dc=ldapdom,dc=net"
+                ldap_service_password_file = /ldap-krb-keyfile
+                ldap_servers = ldap://krb.ldapdom.net
+        }
+
+[logging]
+        kdc = FILE:/var/log/krb5/krb5kdc.log
+        admin_server = FILE:/var/log/krb5/kadmind.log
+
+Create a password file for Kerberos to read its LDAP bind password (enter aaaaaaaa):
+> /usr/lib/mit/sbin/kdb5_ldap_util stashsrvpw -f /ldap-krb-keyfile cn=krbkdc,dc=ldapdom,dc=net
+> /usr/lib/mit/sbin/kdb5_ldap_util stashsrvpw -f /ldap-krb-keyfile cn=krbadm,dc=ldapdom,dc=net
+
+Create kerberos database in LDAP:
+/usr/lib/mit/sbin/kdb5_ldap_util -H 'ldap://krb.ldapdom.net' -D cn=root -w aaaaaaaa create -r LDAPDOM.NET -subtrees 'ou=UnixUser,dc=ldapdom,dc=net' -s -P aaaaaaaa
+
+Start Kerberos:
+systemctl start krb5kdc kadmind
+
+Grant access rights to Kerberos KDC in directory:
+> ldapmodify -x -D cn=root -w aaaaaaaa
+dn: ou=UnixUser,dc=ldapdom,dc=net
+changetype: modify
+add: aci
+aci: (target="ldap:///ou=UnixUser,dc=ldapdom,dc=net")(targetattr=*) 
+     (version 3.0; acl "krbkdc-read"; allow (all) 
+     userdn = "ldap:///cn=krbkdc,dc=ldapdom,dc=net";)
+
+dn: ou=UnixUser,dc=ldapdom,dc=net
+changetype: modify
+add: aci
+aci: (target="ldap:///ou=UnixUser,dc=ldapdom,dc=net")(targetattr=*) 
+     (version 3.0; acl "krbadm-write"; allow (all) 
+     userdn = "ldap:///cn=krbadm,dc=ldapdom,dc=net";)
+
+Create Kerberos principles in directory:
+> /usr/lib/mit/sbin/kadmin.local -r LDAPDOM.NET -q 'addprinc -x dn="uid=testuser1,ou=UnixUser,dc=ldapdom,dc=net" -pw goodpass testuser1'
+> /usr/lib/mit/sbin/kadmin.local -r LDAPDOM.NET -q 'addprinc -x dn="uid=testuser2,ou=UnixUser,dc=ldapdom,dc=net" -pw goodpass testuser2'
+
+Work around an issue in SSSD's PAM responder, that caused authentication failures:
+> /usr/lib/mit/sbin/kadmin.local -r LDAPDOM.NET -q 'modprinc +requires_preauth testuser1'
+> /usr/lib/mit/sbin/kadmin.local -r LDAPDOM.NET -q 'modprinc +requires_preauth testuser2'
+

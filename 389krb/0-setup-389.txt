@@ -1,0 +1,9 @@
+Setup:
+Hostname: howie.suse.de
+Instance name: ldapdom
+Suffix: dc=ldapdom,dc=net
+DM DN: cn=root
+Password: aaaaaaaa (8 times a)
+
+After directory server is set up:
+cp /usr/share/dirsrv/data/60kerberos.ldif /etc/dirsrv/slapd-ldapdom/schema/
